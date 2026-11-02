@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launcher</title>
+<style>
+  :root { --bg:#12141a; --card:#1d212b; --card2:#272d3a; --text:#e8eaf0; --muted:#8b93a7; --accent:#f59e0b; }
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; background:var(--bg); color:var(--text);
+         font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; padding:40px 20px; }
+  .wrap { max-width:960px; margin:0 auto; }
+  header { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:20px; }
+  h1 { font-size:1.4rem; margin:0; font-weight:600; }
+  .clock { color:var(--muted); font-size:.95rem; }
+  #search { width:100%; padding:14px 16px; font-size:1rem; border-radius:12px; border:1px solid var(--card2);
+            background:var(--card); color:var(--text); margin-bottom:18px; outline:none; }
+  #search:focus { border-color:var(--accent); }
+  .crumbs { margin-bottom:18px; font-size:.95rem; color:var(--muted); min-height:1.4em; }
+  .crumbs a { color:var(--accent); cursor:pointer; text-decoration:none; }
+  .crumbs a:hover { text-decoration:underline; }
+  .crumbs .sep { margin:0 8px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:14px; }
+  .tile { position:relative; background:var(--card); border-radius:14px; padding:18px 10px 14px; text-align:center;
+          text-decoration:none; color:var(--text); transition:transform .12s, background .12s; display:block; cursor:pointer; }
+  .tile:hover { background:var(--card2); transform:translateY(-2px); }
+  .tile img, .tile .ico { width:40px; height:40px; border-radius:8px; display:block; margin:0 auto 10px; }
+  .tile img { background:#fff2; }
+  .tile .ico { font-size:2rem; line-height:40px; }
+  .tile span { font-size:.88rem; word-break:break-word; }
+  .tile small { display:block; color:var(--muted); font-size:.72rem; margin-top:4px; }
+  .tile .btns { position:absolute; top:4px; right:4px; display:none; }
+  body.edit .tile .btns { display:flex; }
+  .tile .btns button { background:none; border:0; color:var(--muted); cursor:pointer; font-size:.95rem; padding:2px 5px; }
+  .tile .btns button:hover { color:var(--accent); }
+  .tile .btns .del:hover { color:#ef4444; }
+  body.edit .tile:hover { transform:none; }
+  .add { border:2px dashed var(--card2); background:transparent; color:var(--muted); font-size:.9rem; }
+  .add:hover { color:var(--accent); border-color:var(--accent); background:transparent; }
+  .empty { color:var(--muted); padding:20px 0; }
+  .bar { margin-top:28px; display:flex; gap:10px; justify-content:center; }
+  button.btn { background:var(--card); color:var(--muted); border:1px solid var(--card2); padding:8px 14px;
+               border-radius:8px; cursor:pointer; font-size:.85rem; }
+  button.btn:hover { color:var(--text); }
+  dialog { background:var(--card); color:var(--text); border:1px solid var(--card2); border-radius:14px; padding:22px; width:min(360px,90vw); }
+  dialog::backdrop { background:#0008; }
+  dialog input, dialog select { width:100%; padding:10px; margin:6px 0 14px; border-radius:8px; border:1px solid var(--card2);
+                 background:var(--bg); color:var(--text); font-size:1rem; }
+  dialog label { font-size:.85rem; color:var(--muted); }
+  .row { display:flex; gap:10px; justify-content:flex-end; }
+  .primary { background:var(--accent); color:#111; border:0; font-weight:600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>Launcher</h1><div class="clock" id="clock"></div></header>
+  <input id="search" placeholder="Search everything…  (Enter opens the first match)" autofocus>
+  <div class="crumbs" id="crumbs"></div>
+  <div class="grid" id="grid"></div>
+  <div class="bar">
+    <button class="btn" id="editBtn">Edit</button>
+    <button class="btn" id="exportBtn">Export</button>
+    <button class="btn" id="importBtn">Import</button>
+    <button class="btn" id="resetBtn">Reset</button>
+  </div>
+</div>
+
+<dialog id="dlg">
+  <form method="dialog" id="form">
+    <label>Type</label>
+    <select id="typeIn"><option value="site">Site (a link)</option><option value="folder">Folder (a menu)</option></select>
+    <label>Name</label><input id="nameIn" required>
+    <div id="urlBox"><label>URL</label><input id="urlIn" placeholder="example.com"></div>
+    <div class="row">
+      <button type="button" class="btn" id="cancel">Cancel</button>
+      <button class="btn primary" value="ok" id="okBtn">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+/* ---------- Starting data: edit in the page with the Edit button, or change here ---------- */
+const GH = 'https://github.com/YOUR-USERNAME';
+const proj = (n) => ({name:'Project '+n, children:[
+  {name:'Status', url:`${GH}/project${n}/actions`},
+  {name:'Upload', url:`${GH}/project${n}/upload`},
+  {name:'App',    url:`https://YOUR-USERNAME.github.io/project${n}/`},
+]});
+const defaults = [
+  {name:'GitHub', children:[proj(1), proj(2), proj(3)]},
+  {name:'Claude', url:'https://claude.ai'},
+  {name:'Gmail', url:'https://mail.google.com'},
+  {name:'YouTube', url:'https://youtube.com'},
+  {name:'Amazon KDP', url:'https://kdp.amazon.com'},
+];
+/* -------------------------------------------------------------------------------------------- */
+
+const KEY = 'launcher.tiles.v2', OLD = 'launcher.tiles.v1';
+const clone = o => JSON.parse(JSON.stringify(o));
+let root;
+try {
+  root = JSON.parse(localStorage.getItem(KEY));
+  if (!root) { const old = JSON.parse(localStorage.getItem(OLD)); root = old ? old : clone(defaults); }
+} catch(e) { root = clone(defaults); }
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(root)); } catch(e){} };
+
+const $ = id => document.getElementById(id);
+const norm = u => /^https?:\/\//i.test(u) ? u : 'https://' + u;
+const host = u => { try { return new URL(norm(u)).hostname; } catch(e) { return ''; } };
+let path = [];            // indices into nested children
+let editing = null;       // {list, index} when editing an existing tile, else null
+let addTarget = null;     // list to add to
+
+function listAt(p) { let l = root; for (const i of p) l = l[i].children; return l; }
+
+function flatten(list, trail, out) {
+  list.forEach(t => {
+    if (t.children) flatten(t.children, [...trail, t.name], out);
+    else out.push({...t, trail});
+  });
+  return out;
+}
+
+function renderCrumbs() {
+  const c = $('crumbs'); c.innerHTML = '';
+  if (!path.length) return;
+  const mk = (label, p) => { const a = document.createElement('a'); a.textContent = label; a.onclick = () => { path = p; render(); }; return a; };
+  c.appendChild(mk('Home', []));
+  let l = root;
+  path.forEach((idx, k) => {
+    const sep = document.createElement('span'); sep.className = 'sep'; sep.textContent = '/'; c.appendChild(sep);
+    const t = l[idx]; l = t.children;
+    if (k === path.length - 1) { const s = document.createElement('span'); s.textContent = t.name; c.appendChild(s); }
+    else c.appendChild(mk(t.name, path.slice(0, k + 1)));
+  });
+}
+
+function tileEl(t, list, i, subtitle) {
+  const isFolder = !!t.children;
+  const el = document.createElement(isFolder ? 'div' : 'a');
+  el.className = 'tile';
+  if (!isFolder) el.href = norm(t.url);
+  el.innerHTML = (isFolder ? '<div class="ico">📁</div>' : `<img alt="" src="https://www.google.com/s2/favicons?domain=${host(t.url)}&sz=64">`)
+    + '<span></span>' + (subtitle ? '<small></small>' : '')
+    + (list ? '<div class="btns"><button class="ed" title="Edit">✎</button><button class="del" title="Remove">✕</button></div>' : '');
+  el.querySelector('span').textContent = t.name;
+  if (subtitle) el.querySelector('small').textContent = subtitle;
+  if (isFolder) el.onclick = () => { path = [...path, i]; $('search').value = ''; render(); };
+  else el.onclick = e => { if (document.body.classList.contains('edit')) e.preventDefault(); };
+  if (list) {
+    el.querySelector('.del').onclick = e => { e.preventDefault(); e.stopPropagation(); if (confirm('Remove "' + t.name + '"' + (isFolder ? ' and everything in it?' : '?'))) { list.splice(i, 1); save(); render(); } };
+    el.querySelector('.ed').onclick = e => { e.preventDefault(); e.stopPropagation(); openDialog(list, i); };
+  }
+  return el;
+}
+
+function render() {
+  renderCrumbs();
+  const q = $('search').value.trim().toLowerCase();
+  const grid = $('grid'); grid.innerHTML = '';
+  if (q) {
+    const hits = flatten(root, [], []).filter(t => (t.name + ' ' + t.url + ' ' + t.trail.join(' ')).toLowerCase().includes(q));
+    hits.forEach(t => grid.appendChild(tileEl(t, null, 0, t.trail.join(' › '))));
+    if (!hits.length) grid.innerHTML = '<div class="empty">No matches. Press Enter to search Google.</div>';
+    return;
+  }
+  const list = listAt(path);
+  list.forEach((t, i) => grid.appendChild(tileEl(t, list, i)));
+  const add = document.createElement('div');
+  add.className = 'tile add';
+  add.innerHTML = '<div style="font-size:1.8rem;line-height:50px">+</div><span>Add</span>';
+  add.onclick = () => openDialog(list, null);
+  grid.appendChild(add);
+}
+
+function openDialog(list, index) {
+  addTarget = list; editing = index === null ? null : index;
+  const t = index === null ? {name:'', url:''} : list[index];
+  $('typeIn').value = t.children ? 'folder' : 'site';
+  $('typeIn').disabled = index !== null;
+  $('nameIn').value = t.name; $('urlIn').value = t.url || '';
+  syncType(); $('dlg').showModal(); $('nameIn').focus();
+}
+function syncType() { $('urlBox').style.display = $('typeIn').value === 'folder' ? 'none' : 'block'; }
+$('typeIn').onchange = syncType;
+$('form').addEventListener('submit', () => {
+  const name = $('nameIn').value.trim(), url = $('urlIn').value.trim(), folder = $('typeIn').value === 'folder';
+  if (!name) return;
+  if (editing !== null) { const t = addTarget[editing]; t.name = name; if (!t.children) t.url = url; }
+  else addTarget.push(folder ? {name, children:[]} : {name, url});
+  save(); render();
+});
+$('cancel').onclick = () => $('dlg').close();
+
+$('search').addEventListener('input', render);
+$('search').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const q = $('search').value.trim(); if (!q) return;
+  const first = $('grid').querySelector('a.tile');
+  location.href = first ? first.href : 'https://www.google.com/search?q=' + encodeURIComponent(q);
+});
+$('editBtn').onclick = () => { document.body.classList.toggle('edit'); $('editBtn').textContent = document.body.classList.contains('edit') ? 'Done' : 'Edit'; };
+$('exportBtn').onclick = () => prompt('Copy this to back up your menu:', JSON.stringify(root));
+$('importBtn').onclick = () => {
+  const s = prompt('Paste exported menu:'); if (!s) return;
+  try { const d = JSON.parse(s); if (Array.isArray(d)) { root = d; path = []; save(); render(); } } catch(e) { alert('That did not look right.'); }
+};
+$('resetBtn').onclick = () => { if (confirm('Replace everything with the starting layout?')) { root = clone(defaults); path = []; save(); render(); } };
+
+const tick = () => { $('clock').textContent = new Date().toLocaleString([], {weekday:'long', hour:'numeric', minute:'2-digit'}); };
+setInterval(tick, 1000); tick();
+render();
+</script>
+</body>
+</html>
