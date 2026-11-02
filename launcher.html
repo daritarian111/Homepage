@@ -20,11 +20,16 @@
   .crumbs a { color:var(--accent); cursor:pointer; text-decoration:none; }
   .crumbs a:hover { text-decoration:underline; }
   .crumbs .sep { margin:0 8px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:14px; }
+
+  /* Layout: two columns or one */
+  .grid { display:grid; gap:14px; }
+  .grid.cols2 { grid-template-columns:1fr 1fr; }
+  .grid.cols1 { grid-template-columns:1fr; }
+
   .tile { position:relative; background:var(--card); border-radius:14px; padding:18px 10px 14px; text-align:center;
           text-decoration:none; color:var(--text); transition:transform .12s, background .12s; display:block; cursor:pointer; }
   .tile:hover { background:var(--card2); transform:translateY(-2px); }
-  .tile img, .tile .ico { width:40px; height:40px; border-radius:8px; display:block; margin:0 auto 10px; }
+  .tile img, .tile .ico { width:40px; height:40px; border-radius:8px; display:block; margin:0 auto 10px; flex-shrink:0; }
   .tile img { background:#fff2; }
   .tile .ico { font-size:2rem; line-height:40px; }
   .tile span { font-size:.88rem; word-break:break-word; }
@@ -34,11 +39,28 @@
   .tile .btns button { background:none; border:0; color:var(--muted); cursor:pointer; font-size:.95rem; padding:2px 5px; }
   .tile .btns button:hover { color:var(--accent); }
   .tile .btns .del:hover { color:#ef4444; }
-  body.edit .tile:hover { transform:none; }
+  body.edit .tile:hover, body.arrange .tile:hover { transform:none; }
   .add { border:2px dashed var(--card2); background:transparent; color:var(--muted); font-size:.9rem; }
   .add:hover { color:var(--accent); border-color:var(--accent); background:transparent; }
+  .add .plus { font-size:1.8rem; line-height:44px; }
   .empty { color:var(--muted); padding:20px 0; }
-  .bar { margin-top:28px; display:flex; gap:10px; justify-content:center; }
+
+  .cols1 .tile { display:flex; align-items:center; gap:14px; text-align:left; padding:14px 16px; }
+  .cols1 .tile img, .cols1 .tile .ico { margin:0; }
+  .cols1 .tile .btns { top:50%; transform:translateY(-50%); }
+  .cols1 .add { justify-content:center; gap:8px; }
+  .cols1 .add .plus { line-height:1; }
+
+  /* Rearrange mode */
+  body.arrange .add { display:none; }
+  body.arrange .tile[data-i] { touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; cursor:grab; }
+  body.arrange .tile[data-i]:not(.placeholder) { animation:wig .3s ease-in-out infinite alternate; }
+  @keyframes wig { from { transform:rotate(-1deg); } to { transform:rotate(1deg); } }
+  .tile.placeholder { opacity:.25; animation:none !important; }
+  .tile.ghost { position:fixed; z-index:1000; margin:0; pointer-events:none; opacity:.95; animation:none !important;
+                transform:scale(1.05) !important; box-shadow:0 10px 30px #000a; transition:none; }
+
+  .bar { margin-top:28px; display:flex; flex-wrap:wrap; gap:10px; justify-content:center; }
   button.btn { background:var(--card); color:var(--muted); border:1px solid var(--card2); padding:8px 14px;
                border-radius:8px; cursor:pointer; font-size:.85rem; }
   button.btn:hover { color:var(--text); }
@@ -56,8 +78,10 @@
   <header><h1>Launcher</h1><div class="clock" id="clock"></div></header>
   <input id="search" placeholder="Search everything…  (Enter opens the first match)" autofocus>
   <div class="crumbs" id="crumbs"></div>
-  <div class="grid" id="grid"></div>
+  <div class="grid cols2" id="grid"></div>
   <div class="bar">
+    <button class="btn" id="layoutBtn">Layout</button>
+    <button class="btn" id="arrBtn">Rearrange</button>
     <button class="btn" id="editBtn">Edit</button>
     <button class="btn" id="exportBtn">Export</button>
     <button class="btn" id="importBtn">Import</button>
@@ -95,7 +119,7 @@ const defaults = [
 ];
 /* -------------------------------------------------------------------------------------------- */
 
-const KEY = 'launcher.tiles.v2', OLD = 'launcher.tiles.v1';
+const KEY = 'launcher.tiles.v2', OLD = 'launcher.tiles.v1', LKEY = 'launcher.layout.v1';
 const clone = o => JSON.parse(JSON.stringify(o));
 let root;
 try {
@@ -105,11 +129,13 @@ try {
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(root)); } catch(e){} };
 
 const $ = id => document.getElementById(id);
+const grid = $('grid');
 const norm = u => /^https?:\/\//i.test(u) ? u : 'https://' + u;
 const host = u => { try { return new URL(norm(u)).hostname; } catch(e) { return ''; } };
+const inMode = m => document.body.classList.contains(m);
 let path = [];            // indices into nested children
-let editing = null;       // {list, index} when editing an existing tile, else null
-let addTarget = null;     // list to add to
+let editing = null;       // index when editing an existing tile, else null
+let addTarget = null;     // list being added to / edited
 
 function listAt(p) { let l = root; for (const i of p) l = l[i].children; return l; }
 
@@ -121,6 +147,18 @@ function flatten(list, trail, out) {
   return out;
 }
 
+/* ---------- Layout (2 columns / 1 column) ---------- */
+let cols = 2;
+try { cols = localStorage.getItem(LKEY) === '1' ? 1 : 2; } catch(e) {}
+function applyLayout() { grid.className = 'grid cols' + cols; }
+$('layoutBtn').onclick = () => {
+  cols = cols === 2 ? 1 : 2;
+  try { localStorage.setItem(LKEY, cols); } catch(e) {}
+  applyLayout();
+};
+applyLayout();
+
+/* ---------- Rendering ---------- */
 function renderCrumbs() {
   const c = $('crumbs'); c.innerHTML = '';
   if (!path.length) return;
@@ -139,14 +177,15 @@ function tileEl(t, list, i, subtitle) {
   const isFolder = !!t.children;
   const el = document.createElement(isFolder ? 'div' : 'a');
   el.className = 'tile';
-  if (!isFolder) el.href = norm(t.url);
-  el.innerHTML = (isFolder ? '<div class="ico">📁</div>' : `<img alt="" src="https://www.google.com/s2/favicons?domain=${host(t.url)}&sz=64">`)
-    + '<span></span>' + (subtitle ? '<small></small>' : '')
+  if (!isFolder) { el.href = norm(t.url); el.draggable = false; }
+  if (list) el.dataset.i = i;
+  el.innerHTML = (isFolder ? '<div class="ico">📁</div>' : `<img alt="" draggable="false" src="https://www.google.com/s2/favicons?domain=${host(t.url)}&sz=64">`)
+    + '<div class="txt"><span></span>' + (subtitle ? '<small></small>' : '') + '</div>'
     + (list ? '<div class="btns"><button class="ed" title="Edit">✎</button><button class="del" title="Remove">✕</button></div>' : '');
   el.querySelector('span').textContent = t.name;
   if (subtitle) el.querySelector('small').textContent = subtitle;
-  if (isFolder) el.onclick = () => { path = [...path, i]; $('search').value = ''; render(); };
-  else el.onclick = e => { if (document.body.classList.contains('edit')) e.preventDefault(); };
+  if (isFolder) el.onclick = () => { if (inMode('arrange')) return; path = [...path, i]; $('search').value = ''; render(); };
+  else el.onclick = e => { if (inMode('edit') || inMode('arrange')) e.preventDefault(); };
   if (list) {
     el.querySelector('.del').onclick = e => { e.preventDefault(); e.stopPropagation(); if (confirm('Remove "' + t.name + '"' + (isFolder ? ' and everything in it?' : '?'))) { list.splice(i, 1); save(); render(); } };
     el.querySelector('.ed').onclick = e => { e.preventDefault(); e.stopPropagation(); openDialog(list, i); };
@@ -157,7 +196,7 @@ function tileEl(t, list, i, subtitle) {
 function render() {
   renderCrumbs();
   const q = $('search').value.trim().toLowerCase();
-  const grid = $('grid'); grid.innerHTML = '';
+  grid.innerHTML = '';
   if (q) {
     const hits = flatten(root, [], []).filter(t => (t.name + ' ' + t.url + ' ' + t.trail.join(' ')).toLowerCase().includes(q));
     hits.forEach(t => grid.appendChild(tileEl(t, null, 0, t.trail.join(' › '))));
@@ -168,11 +207,12 @@ function render() {
   list.forEach((t, i) => grid.appendChild(tileEl(t, list, i)));
   const add = document.createElement('div');
   add.className = 'tile add';
-  add.innerHTML = '<div style="font-size:1.8rem;line-height:50px">+</div><span>Add</span>';
+  add.innerHTML = '<div class="plus">+</div><span>Add</span>';
   add.onclick = () => openDialog(list, null);
   grid.appendChild(add);
 }
 
+/* ---------- Add / edit dialog ---------- */
 function openDialog(list, index) {
   addTarget = list; editing = index === null ? null : index;
   const t = index === null ? {name:'', url:''} : list[index];
@@ -192,14 +232,96 @@ $('form').addEventListener('submit', () => {
 });
 $('cancel').onclick = () => $('dlg').close();
 
+/* ---------- Search ---------- */
 $('search').addEventListener('input', render);
 $('search').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   const q = $('search').value.trim(); if (!q) return;
-  const first = $('grid').querySelector('a.tile');
+  const first = grid.querySelector('a.tile');
   location.href = first ? first.href : 'https://www.google.com/search?q=' + encodeURIComponent(q);
 });
-$('editBtn').onclick = () => { document.body.classList.toggle('edit'); $('editBtn').textContent = document.body.classList.contains('edit') ? 'Done' : 'Edit'; };
+
+/* ---------- Modes: edit / rearrange ---------- */
+function setMode(m) {
+  const cur = inMode('edit') ? 'edit' : inMode('arrange') ? 'arrange' : '';
+  if (cur === m) m = '';
+  document.body.classList.toggle('edit', m === 'edit');
+  document.body.classList.toggle('arrange', m === 'arrange');
+  $('editBtn').textContent = m === 'edit' ? 'Done' : 'Edit';
+  $('arrBtn').textContent = m === 'arrange' ? 'Done' : 'Rearrange';
+  if (m === 'arrange') $('search').value = '';
+  render();
+}
+$('editBtn').onclick = () => setMode('edit');
+$('arrBtn').onclick = () => setMode('arrange');
+
+/* ---------- Drag to rearrange (touch + mouse) ---------- */
+let drag = null;
+grid.addEventListener('contextmenu', e => { if (inMode('arrange')) e.preventDefault(); });
+grid.addEventListener('dragstart', e => { if (inMode('arrange')) e.preventDefault(); });
+
+grid.addEventListener('pointerdown', e => {
+  if (!inMode('arrange')) return;
+  const tile = e.target.closest('.tile[data-i]'); if (!tile) return;
+  e.preventDefault();
+  const r = tile.getBoundingClientRect();
+  drag = { tile, id:e.pointerId, dx:e.clientX - r.left, dy:e.clientY - r.top,
+           sx:e.clientX, sy:e.clientY, x:e.clientX, y:e.clientY, started:false, ghost:null, rect:r };
+  try { grid.setPointerCapture(e.pointerId); } catch(err) {}
+});
+
+grid.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag.x = e.clientX; drag.y = e.clientY;
+  if (!drag.started) {
+    if (Math.hypot(drag.x - drag.sx, drag.y - drag.sy) < 6) return;
+    startDrag();
+  }
+  moveGhost(); reorder();
+});
+grid.addEventListener('pointerup', e => { if (drag && e.pointerId === drag.id) endDrag(); });
+grid.addEventListener('pointercancel', e => { if (drag && e.pointerId === drag.id) endDrag(); });
+
+function startDrag() {
+  drag.started = true;
+  const g = drag.tile.cloneNode(true);
+  g.removeAttribute('data-i'); g.classList.add('ghost');
+  g.style.width = drag.rect.width + 'px'; g.style.height = drag.rect.height + 'px';
+  document.body.appendChild(g);
+  drag.ghost = g;
+  drag.tile.classList.add('placeholder');
+  requestAnimationFrame(loop);
+}
+function moveGhost() {
+  drag.ghost.style.left = (drag.x - drag.dx) + 'px';
+  drag.ghost.style.top  = (drag.y - drag.dy) + 'px';
+}
+function reorder() {
+  const under = document.elementFromPoint(drag.x, drag.y);
+  const el = under && under.closest ? under.closest('.tile[data-i]') : null;
+  if (!el || el === drag.tile) return;
+  const sib = [...grid.children];
+  if (sib.indexOf(drag.tile) < sib.indexOf(el)) el.after(drag.tile); else el.before(drag.tile);
+}
+function loop() {
+  if (!drag || !drag.started) return;
+  if (drag.y < 90) window.scrollBy(0, -12);
+  else if (drag.y > window.innerHeight - 90) window.scrollBy(0, 12);
+  reorder();
+  requestAnimationFrame(loop);
+}
+function endDrag() {
+  const d = drag; drag = null;
+  if (!d.started) return;
+  d.ghost.remove();
+  const order = [...grid.querySelectorAll('.tile[data-i]')].map(el => +el.dataset.i);
+  const list = listAt(path);
+  const reordered = order.map(i => list[i]);
+  list.splice(0, list.length, ...reordered);
+  save(); render();
+}
+
+/* ---------- Backup / reset ---------- */
 $('exportBtn').onclick = () => prompt('Copy this to back up your menu:', JSON.stringify(root));
 $('importBtn').onclick = () => {
   const s = prompt('Paste exported menu:'); if (!s) return;
